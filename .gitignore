@@ -1,0 +1,57 @@
+# 构建目录
+build/
+cmake-build-*/
+
+# 可执行文件
+demo
+*.exe
+*.out
+
+# 目标文件和库
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# CMake 生成的文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 编译器生成
+*.d
+*.pdb
+*.ilk
+
+# CUDA 相关
+*.cubin
+*.ptx
+*.fatbin
+
+# macOS
+.DS_Store
+
+# Python (如果有)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# 日志文件
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+
