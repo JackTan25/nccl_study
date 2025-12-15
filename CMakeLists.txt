@@ -79,8 +79,35 @@ target_include_directories(demo
         ${MPI_CXX_INCLUDE_DIRS}
 )
 
+# ============ 官方示例 (offical_examples) ============
+set(EXAMPLES_DIR ${CMAKE_SOURCE_DIR}/nccl_chap1/offical_examples)
+
+# Example 1: 单进程、单线程、多设备 (不需要 MPI)
+add_executable(example1 ${EXAMPLES_DIR}/example1.cpp)
+set_target_properties(example1 PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
+target_link_libraries(example1 PRIVATE CUDA::cudart NCCL::NCCL)
+target_include_directories(example1 PRIVATE ${NCCL_INCLUDE_DIR})
+
+# Example 2: 每进程一个设备 (需要 MPI)
+add_executable(example2 ${EXAMPLES_DIR}/example2.cpp)
+set_target_properties(example2 PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
+target_link_libraries(example2 PRIVATE CUDA::cudart MPI::MPI_CXX NCCL::NCCL)
+target_include_directories(example2 PRIVATE ${NCCL_INCLUDE_DIR} ${MPI_CXX_INCLUDE_DIRS})
+
+# Example 3: 每线程多个设备 (需要 MPI)
+add_executable(example3 ${EXAMPLES_DIR}/example3.cpp)
+set_target_properties(example3 PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
+target_link_libraries(example3 PRIVATE CUDA::cudart MPI::MPI_CXX NCCL::NCCL)
+target_include_directories(example3 PRIVATE ${NCCL_INCLUDE_DIR} ${MPI_CXX_INCLUDE_DIRS})
+
+# Example 4: 每设备多个通信器 (需要 MPI)
+add_executable(example4 ${EXAMPLES_DIR}/example4.cpp)
+set_target_properties(example4 PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
+target_link_libraries(example4 PRIVATE CUDA::cudart MPI::MPI_CXX NCCL::NCCL)
+target_include_directories(example4 PRIVATE ${NCCL_INCLUDE_DIR} ${MPI_CXX_INCLUDE_DIRS})
+
 # ============ 安装规则 ============
-install(TARGETS demo DESTINATION bin)
+install(TARGETS demo example1 example2 example3 example4 DESTINATION bin)
 
 # ============ 自定义运行目标 ============
 # 添加方便运行的目标
@@ -91,6 +118,37 @@ add_custom_target(run
     DEPENDS demo
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Running demo with 2 MPI processes"
+)
+
+# 运行官方示例
+add_custom_target(run_example1
+    COMMAND $<TARGET_FILE:example1>
+    DEPENDS example1
+    COMMENT "Running example1 (single process, 4 GPUs)"
+)
+
+add_custom_target(run_example2
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+            ${MPIEXEC_PREFLAGS} --allow-run-as-root
+            $<TARGET_FILE:example2>
+    DEPENDS example2
+    COMMENT "Running example2 with 4 MPI processes"
+)
+
+add_custom_target(run_example3
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+            ${MPIEXEC_PREFLAGS} --allow-run-as-root
+            $<TARGET_FILE:example3>
+    DEPENDS example3
+    COMMENT "Running example3 with 2 MPI processes (2 GPUs each)"
+)
+
+add_custom_target(run_example4
+    COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+            ${MPIEXEC_PREFLAGS} --allow-run-as-root
+            $<TARGET_FILE:example4>
+    DEPENDS example4
+    COMMENT "Running example4 with 4 MPI processes"
 )
 
 # 显示配置信息

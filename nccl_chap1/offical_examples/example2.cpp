@@ -1,10 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "cuda_runtime.h"
 #include "nccl.h"
 #include "mpi.h"
 #include <unistd.h>
 #include <stdint.h>
+
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -36,15 +38,45 @@
 } while(0)
 
 
-static uint64_t getHostHash(const char* string) {
+static uint64_t getHash(const char* string, size_t n) {
   // Based on DJB2a, result = result * 33 ^ char
   uint64_t result = 5381;
-  for (int c = 0; string[c] != '\0'; c++){
+  for (size_t c = 0; c < n; c++){
     result = ((result << 5) + result) ^ string[c];
   }
   return result;
 }
 
+/* Generate a hash of the unique identifying string for this host
+ * that will be unique for both bare-metal and container instances
+ * Equivalent of a hash of;
+ *
+ * $(hostname)$(cat /proc/sys/kernel/random/boot_id)
+ *
+ */
+#define HOSTID_FILE "/proc/sys/kernel/random/boot_id"
+static uint64_t getHostHash(const char* hostname) {
+  char hostHash[1024];
+
+  // Fall back is the hostname if something fails
+  (void) strncpy(hostHash, hostname, sizeof(hostHash));
+  int offset = strlen(hostHash);
+
+  FILE *file = fopen(HOSTID_FILE, "r");
+  if (file != NULL) {
+    char *p;
+    if (fscanf(file, "%ms", &p) == 1) {
+        strncpy(hostHash+offset, p, sizeof(hostHash)-offset-1);
+        free(p);
+    }
+  }
+  fclose(file);
+
+  // Make sure the string is terminated
+  hostHash[sizeof(hostHash)-1]='\0';
+
+  return getHash(hostHash, strlen(hostHash));
+}
 
 static void getHostName(char* hostname, int maxlen) {
   gethostname(hostname, maxlen);
@@ -71,7 +103,7 @@ int main(int argc, char* argv[])
   MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &nRanks));
 
 
-  //calculating localRank which is used in selecting a GPU
+  //calculating localRank based on hostname which is used in selecting a GPU
   uint64_t hostHashs[nRanks];
   char hostname[1024];
   getHostName(hostname, 1024);
@@ -83,70 +115,44 @@ int main(int argc, char* argv[])
   }
 
 
-  //each process is using two GPUs
-  int nDev = 2;
-
-
-  float** sendbuff = (float**)malloc(nDev * sizeof(float*));
-  float** recvbuff = (float**)malloc(nDev * sizeof(float*));
-  cudaStream_t* s = (cudaStream_t*)malloc(sizeof(cudaStream_t)*nDev);
-
-
-  //picking GPUs based on localRank
-  for (int i = 0; i < nDev; ++i) {
-    CUDACHECK(cudaSetDevice(localRank*nDev + i));
-    CUDACHECK(cudaMalloc(sendbuff + i, size * sizeof(float)));
-    CUDACHECK(cudaMalloc(recvbuff + i, size * sizeof(float)));
-    CUDACHECK(cudaMemset(sendbuff[i], 1, size * sizeof(float)));
-    CUDACHECK(cudaMemset(recvbuff[i], 0, size * sizeof(float)));
-    CUDACHECK(cudaStreamCreate(s+i));
-  }
-
-
   ncclUniqueId id;
-  ncclComm_t comms[nDev];
+  ncclComm_t comm;
+  float *sendbuff, *recvbuff;
+  cudaStream_t s;
 
 
-  //generating NCCL unique ID at one process and broadcasting it to all
+  //get NCCL unique ID at rank 0 and broadcast it to all others
   if (myRank == 0) ncclGetUniqueId(&id);
   MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
 
 
-  //initializing NCCL, group API is required around ncclCommInitRank as it is
-  //called across multiple GPUs in each thread/process
-  NCCLCHECK(ncclGroupStart());
-  for (int i=0; i<nDev; i++) {
-     CUDACHECK(cudaSetDevice(localRank*nDev + i));
-     NCCLCHECK(ncclCommInitRank(comms+i, nRanks*nDev, id, myRank*nDev + i));
-  }
-  NCCLCHECK(ncclGroupEnd());
+  //picking a GPU based on localRank, allocate device buffers
+  CUDACHECK(cudaSetDevice(localRank));
+  CUDACHECK(cudaMalloc(&sendbuff, size * sizeof(float)));
+  CUDACHECK(cudaMalloc(&recvbuff, size * sizeof(float)));
+  CUDACHECK(cudaStreamCreate(&s));
 
 
-  //calling NCCL communication API. Group API is required when using
-  //multiple devices per thread/process
-  NCCLCHECK(ncclGroupStart());
-  for (int i=0; i<nDev; i++)
-     NCCLCHECK(ncclAllReduce((const void*)sendbuff[i], (void*)recvbuff[i], size, ncclFloat, ncclSum,
-           comms[i], s[i]));
-  NCCLCHECK(ncclGroupEnd());
+  //initializing NCCL
+  NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
 
 
-  //synchronizing on CUDA stream to complete NCCL communication
-  for (int i=0; i<nDev; i++)
-      CUDACHECK(cudaStreamSynchronize(s[i]));
+  //communicating using NCCL
+  NCCLCHECK(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclSum,
+        comm, s));
 
 
-  //freeing device memory
-  for (int i=0; i<nDev; i++) {
-     CUDACHECK(cudaFree(sendbuff[i]));
-     CUDACHECK(cudaFree(recvbuff[i]));
-  }
+  //completing NCCL operation by synchronizing on the CUDA stream
+  CUDACHECK(cudaStreamSynchronize(s));
+
+
+  //free device buffers
+  CUDACHECK(cudaFree(sendbuff));
+  CUDACHECK(cudaFree(recvbuff));
 
 
   //finalizing NCCL
-  for (int i=0; i<nDev; i++) {
-     ncclCommDestroy(comms[i]);
-  }
+  ncclCommDestroy(comm);
 
 
   //finalizing MPI
