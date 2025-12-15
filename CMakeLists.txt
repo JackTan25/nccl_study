@@ -106,8 +106,14 @@ set_target_properties(example4 PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
 target_link_libraries(example4 PRIVATE CUDA::cudart MPI::MPI_CXX NCCL::NCCL)
 target_include_directories(example4 PRIVATE ${NCCL_INCLUDE_DIR} ${MPI_CXX_INCLUDE_DIRS})
 
+# Example Reduce Verify: 规约操作验证 (不需要 MPI)
+add_executable(example_reduce_verify ${EXAMPLES_DIR}/example_reduce_verify.cpp)
+set_target_properties(example_reduce_verify PROPERTIES CUDA_ARCHITECTURES "70;75;80;86")
+target_link_libraries(example_reduce_verify PRIVATE CUDA::cudart NCCL::NCCL)
+target_include_directories(example_reduce_verify PRIVATE ${NCCL_INCLUDE_DIR})
+
 # ============ 安装规则 ============
-install(TARGETS demo example1 example2 example3 example4 DESTINATION bin)
+install(TARGETS demo example1 example2 example3 example4 example_reduce_verify DESTINATION bin)
 
 # ============ 自定义运行目标 ============
 # 添加方便运行的目标
@@ -149,6 +155,12 @@ add_custom_target(run_example4
             $<TARGET_FILE:example4>
     DEPENDS example4
     COMMENT "Running example4 with 4 MPI processes"
+)
+
+add_custom_target(run_reduce_verify
+    COMMAND $<TARGET_FILE:example_reduce_verify>
+    DEPENDS example_reduce_verify
+    COMMENT "Running reduce operations verification (4 GPUs)"
 )
 
 # 显示配置信息
